@@ -173,15 +173,15 @@ class ChineseStandardMahjongEnv(MultiAgentEnv):
     
     # 返回当前待决策的玩家
     @property
-    def active_player(self): return self._active_player
+    def active_player(self) -> PlayerIDType: return self._active_player
 
     # 返回玩家的动作空间，调用_update_action_space_and_fan之后计算得出
     @property
-    def action_space(self): return self._action_space
+    def action_space(self) -> List[ActionNameType]: return self._action_space
 
     # 是否结束
     @property
-    def done(self): return self._done
+    def done(self) -> bool: return self._done
 
     # 返回玩家已经形成的番，调用_update_action_space_and_fan之后计算得出
     @property
@@ -215,7 +215,7 @@ class ChineseStandardMahjongEnv(MultiAgentEnv):
     # 当前待决策的牌以及来源：若from非None，则是玩家打出/补杠的牌。
     # 否则若card是None，当前玩家恰好吃碰杠完成且只能打出牌；若card非None则为从环境摸牌。
     @property
-    def current_card_and_source(self):
+    def current_card_and_source(self) -> Tuple[Union[CardNameType, None], PlayerIDType]:
         return (self._current_card, self._current_card_from)
     
     # 设置待决策的牌及其来源
