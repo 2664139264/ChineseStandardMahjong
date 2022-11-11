@@ -139,7 +139,7 @@ class ChineseStandardMahjongEnv(MultiAgentEnv):
     
     # 将字符串表示的牌转为 (牌类型, 牌面点数)
     @classmethod
-    def card_to_tuple(cls, card:CardNameType) -> Union[Tuple[CardType], None]:
+    def card_to_tuple(cls, card:CardNameType) -> Tuple[Union[CardType, None]]:
         return (None, None) if card is None else (card[0], card[1])
 
     # 把字符串表示的动作转为 (动作类型, 牌张)

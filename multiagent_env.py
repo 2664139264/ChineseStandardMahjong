@@ -1,5 +1,4 @@
-from ast import Not
-from typing import Any, Tuple, Dict, List
+from typing import Any, Dict, List
 from abc import ABCMeta, abstractmethod  
 
 class MultiAgentEnv(metaclass=ABCMeta):
@@ -21,18 +20,22 @@ class MultiAgentEnv(metaclass=ABCMeta):
     def active_player(self) -> PlayerIDType:
         raise NotImplementedError
 
+    @property
     @abstractmethod
     def state(self) -> StateType:
         raise NotImplementedError
 
+    @property
     @abstractmethod
     def observation(self) -> ObservationType:
         raise NotImplementedError
 
+    @property
     @abstractmethod
-    def history(self) -> List[Tuple[StateType, PlayerIDType, ActionType]]:
+    def history(self) -> List:
         raise NotImplementedError
 
+    @property
     @abstractmethod
     def action_space(self) -> List[ActionType]:
         raise NotImplementedError
