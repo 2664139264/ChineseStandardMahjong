@@ -20,5 +20,5 @@ class ModelPool(metaclass=ABCMeta):
         raise NotImplementedError
 
     @abstractmethod
-    def sample_model(self, n:int, dist:DistributionType) -> Iterable[ModelType]:
+    def sample_model(self, n:int, dist:DistributionType) -> Iterable[ModelHandlerType]:
         raise NotImplementedError
