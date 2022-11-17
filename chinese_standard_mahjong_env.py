@@ -235,7 +235,7 @@ class ChineseStandardMahjongEnv(MultiAgentEnv):
 
     # 根据配置来决定如何重置环境
     def reset(self):
-        reset_mode = self.config['reset_mode']
+        reset_mode = self.config.get('reset_mode', dict())
         cards_reset_mode = reset_mode.get('cards', 'random')
         if cards_reset_mode == 'fixed':
             self._general_wall_initializer(self.config)
@@ -248,7 +248,7 @@ class ChineseStandardMahjongEnv(MultiAgentEnv):
         self._game_state_initializer()
     
     # 初始化门风、圈风
-    def _set_initial_winds(self, prevalent_wind:int=None):
+    def _set_initial_winds(self, prevalent_wind:Union[int, None]=None):
         
         self.prevalent_wind = prevalent_wind
         if prevalent_wind is None:
@@ -632,7 +632,8 @@ class ChineseStandardMahjongEnv(MultiAgentEnv):
         self._discard_histories[self.active_player].append(card)
     
     # 玩家打出一张牌后过一圈，所有玩家决策完是否吃碰杠之后调用，将副露暴露出来
-    def _add_shown_pack(self, action:ActionNameType, card_from:Union[PlayerIDType, None], card_to:PlayerIDType):
+    def _add_shown_pack(self, action:ActionNameType, card_from:Union[PlayerIDType, None]):
+        card_to = self.active_player
         action_type, card = self.action_to_tuple(action)
         assert action_type in {'Chi', 'Peng', 'Gang', 'BuGang'}
         self._shown_packs[card_to].append((action_type, card, card_from))
@@ -738,7 +739,7 @@ class ChineseStandardMahjongEnv(MultiAgentEnv):
                 peng_pack_id = self._peng_pack_index_of(a0_card)
                 del self._shown_packs[self.active_player][peng_pack_id]
                 # 添加新的副露
-                self._add_shown_pack(action=a0, card_from=None, card_to=self.active_player)
+                self._add_shown_pack(action=a0, card_from=None)
                 # 修改手牌，删去补杠的那张
                 self._add_hand_card(a0_card, -1)
                 # 补牌，等待玩家打出一张牌
@@ -759,7 +760,7 @@ class ChineseStandardMahjongEnv(MultiAgentEnv):
                         # 牌权属于杠牌的人
                         self._active_player = self._next_player(last_round_player, i+1)
                         # 加入杠牌副露
-                        self._add_shown_pack(action=a, card_from=last_round_player, card_to=self.active_player)
+                        self._add_shown_pack(action=a, card_from=last_round_player)
                         # 更新手牌
                         self._add_hand_card(a_card, 1-self._gang_tile_length)
                         # 杠牌需要补摸一张
@@ -771,7 +772,7 @@ class ChineseStandardMahjongEnv(MultiAgentEnv):
                         # 牌权属于碰牌的人
                         self._active_player = self._next_player(last_round_player, i+1)
                         # 加入碰牌副露
-                        self._add_shown_pack(action=a, card_from=last_round_player, card_to=self.active_player)
+                        self._add_shown_pack(action=a, card_from=last_round_player)
                         # 更新手牌
                         self._add_hand_card(a_card, 1-self._peng_tile_length)
                         # 当前只能打牌
@@ -789,7 +790,7 @@ class ChineseStandardMahjongEnv(MultiAgentEnv):
                         # 牌权属于吃牌的玩家
                         self._active_player = self._next_player(last_round_player)
                         # 添加副露
-                        self._add_shown_pack(action=a1, card_from=last_round_player, card_to=self.active_player)
+                        self._add_shown_pack(action=a1, card_from=last_round_player)
                         # 修改手牌
                         self._add_hand_card(self._current_card)
                         for i in range(-1, self._chi_tile_length-1):
