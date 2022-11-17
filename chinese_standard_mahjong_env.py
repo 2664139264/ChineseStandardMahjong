@@ -377,6 +377,8 @@ class ChineseStandardMahjongEnv(MultiAgentEnv):
             'n_hand_cards' : tuple(map(lambda x : sum(x.values()), self._hand_card_counters)),
             # 每个玩家的副露
             'shown_packs' : self._shown_packs,
+            # 我的暗杠
+            'hidden_pack' : self._hidden_packs[self.active_player],
             # 每个玩家的暗杠数量
             'n_hidden_packs' : tuple(map(len, self._hidden_packs)),
             # 每个玩家的牌河
