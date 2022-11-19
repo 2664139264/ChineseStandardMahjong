@@ -16,8 +16,10 @@ class ChineseStandardMahjongBotzoneAdapter(BotzoneAdapter):
     def reset(self):
         # 内置环境
         self._env = ChineseStandardMahjongEnv(config=dict())
-        # 我方的id
+        # 我方的id，按照ChineseStandardMahjongEnv的表示
         self._my_id = None
+        # 我方的门风，按照Botzone的表示方式
+        self._my_seat_wind = None
         # 各方牌墙剩余
         self._wall_remains = [len(self._env._card_names) * self._env._n_duplicate_cards // self._env.n_players - self._env._n_hand_card for _ in range(self._env.n_players)]
         # 各方手牌剩余
@@ -28,7 +30,9 @@ class ChineseStandardMahjongBotzoneAdapter(BotzoneAdapter):
         self._last_anganged_card = None
         # 处理过的历史长度
         self._processed_history_length = 0
-
+        # 上一次决策的玩家是谁
+        self._last_player_id = None
+        # 初始化当前牌张
         self._env._set_current_card_and_source(None, None)
 
     # 我方观测信息
@@ -85,6 +89,7 @@ class ChineseStandardMahjongBotzoneAdapter(BotzoneAdapter):
     def _process_successful_bugang_and_play(self) -> None:
         
         # 如果没有打牌或者补杠操作
+        print('Unprocessed_actions: ', self._env._unprocessed_actions)
         if len(self._env._unprocessed_actions) == 0:
             return
         
@@ -124,6 +129,7 @@ class ChineseStandardMahjongBotzoneAdapter(BotzoneAdapter):
         # 设置门风圈风
         if int(request_parts[0]) == 0:
             seat_wind, prevalent_wind = map(int, request_parts[1:])
+            self._my_seat_wind = seat_wind
             self._env.prevalent_wind = 1 + prevalent_wind
             self._env.seat_winds = tuple(1 + (prevalent_wind + i) % self._env.n_players for i in range(self._env.n_players))
             self._my_id = (seat_wind - prevalent_wind) % self._env.n_players
@@ -142,33 +148,38 @@ class ChineseStandardMahjongBotzoneAdapter(BotzoneAdapter):
         if int(request_parts[0]) == 2:
             self._env._active_player = self._my_id
             # 看看有没有成功的补杠和打牌待处理
+            
             self._process_successful_bugang_and_play()
             # 牌墙牌数目减少
-            self._wall_remains[self._my_id] -= 1            
-            # 摸出一张牌
+            self._wall_remains[self._my_id] -= 1
+            # 手牌数目增加
+            self._n_hand_cards[self._my_id] += 1      
+            # 摸的牌
             card = request_parts[1]
             # 海底牌标记
             if self._wall_remains[self._env._next_player(self._my_id)] == 0:
                 self._env._is_wall_last = True
-            # 手牌数目不增加，直至打出一张牌/补杠/暗杠时才将摸到的牌添加到自己的手牌中
+            # 手牌暂不修改，摸到的牌仍然放在self._env._current_card里，直至打出一张牌/补杠/暗杠时才将摸到的牌添加到自己的手牌中
+            # 因为这张可能就是听的牌，需要传入算番器
             self._env._set_current_card_and_source(card, None)
             return
 
         # 各个玩家动作
         if int(request_parts[0]) == 3:
-            # 做这个动作的玩家
+            # 做这个动作的玩家，按照ChineseStandardMahjongEnv的id表示
             player = (int(request_parts[1]) + 1 - self._env.prevalent_wind) % self._env.n_players
             # 可能为DRAW/PLAY/CHI/PENG/GANG/BUGANG
             action_type = request_parts[2]
             
             # 其他玩家摸牌（自己摸牌的情况在2中已经处理掉了）
             if action_type == 'DRAW':
+                print('draw: ', player)
                 self._env._active_player = player
                 # 看看有没有成功的补杠和打牌待处理
                 self._process_successful_bugang_and_play()
                 # 牌墙牌数目减少
                 self._wall_remains[player] -= 1
-                # 其他玩家的手牌数目直接增加
+                # 玩家的手牌数目直接增加
                 self._n_hand_cards[player] += 1
                 # 海底牌标记
                 if self._wall_remains[self._env._next_player(player)] == 0:
@@ -179,7 +190,7 @@ class ChineseStandardMahjongBotzoneAdapter(BotzoneAdapter):
             
             # 一旦没有杠上开花/抢杠和，标记失效
             self._env._is_about_kong = False
-            # 某个玩家打出一张牌
+            # 某个玩家打出一张牌（包括自己）
             if action_type == 'PLAY':
                 self._env._active_player = player
                 # 维护手牌数量
@@ -187,6 +198,9 @@ class ChineseStandardMahjongBotzoneAdapter(BotzoneAdapter):
                 self._n_hand_cards[player] -= 1
                 # 如果是我方打牌，还需要维护我方手牌
                 if player == self._my_id:
+                    # 如果自己之前摸了牌，还要把摸的牌加入自己的手牌
+                    if self._env._current_card is not None and self._env._current_card_from is None:
+                        self._add_to_my_hand_card_counter(self._env._current_card)
                     self._add_to_my_hand_card_counter(card, -1)
                 
                 # 当前牌为打出的牌
@@ -208,13 +222,14 @@ class ChineseStandardMahjongBotzoneAdapter(BotzoneAdapter):
                     self._add_to_my_hand_card_counter(played_card, -1)
                     # 变成副露的牌
                     for i in range(-1, -1+self._env._chi_tile_length):
-                        self._add_to_my_hand_card_counter(self._card_name(self._env._card_id(chi_central_card)+i), -1)
+                        self._add_to_my_hand_card_counter(self._env.card_name(self._env.card_id(chi_central_card)+i), -1)
 
                 # 待决策的牌转为打出的牌
                 self._env._set_current_card_and_source(played_card, player)
                 self._env._unprocessed_actions.append(f'Play{played_card}')
                 # 手牌数目增减
                 self._n_hand_cards[player] -= self._env._chi_tile_length
+                self._env._unprocessed_actions.clear()
                 return
 
             # 某个玩家碰牌，并且顺手打出一张
@@ -234,6 +249,7 @@ class ChineseStandardMahjongBotzoneAdapter(BotzoneAdapter):
                 self._env._unprocessed_actions.append(f'Play{played_card}')
                 # 手牌数目增减
                 self._n_hand_cards[player] -= self._env._peng_tile_length
+                self._env._unprocessed_actions.clear()
                 return
             
             # 某个玩家杠上一张打出来的牌/从环境摸来的牌
@@ -268,6 +284,7 @@ class ChineseStandardMahjongBotzoneAdapter(BotzoneAdapter):
                     self._n_hand_cards[player] -= self._env._gang_tile_length - 1
                     self._env._set_current_card_and_source(None, None)
                 
+                self._env._unprocessed_actions.clear()
                 # 下一个动作一定是摸牌
                 return
             
@@ -293,54 +310,41 @@ class ChineseStandardMahjongBotzoneAdapter(BotzoneAdapter):
 
         responses = [r for r in requests if re.match(r'\d', r) is None]
         requests = [r for r in requests if re.match(r'\d', r) is not None]
-        assert len(requests) == len(responses) + 1
         # 采用长时运行模式，需要记录处理了多少条记录
         if len(responses) == 0:
             for request in requests[self._processed_history_length:]:
                 self._load_botzone_request_line(request)
+                self._last_player_id = self._env._active_player
             self._processed_history_length = len(request)
-        
         
         # 没有采用长时运行模式，需要从头处理
         else:
+            assert len(requests) == len(responses) + 1
             for i in range(len(responses)):
                 request, response = requests[i], responses[i]
                 print('***', request, '*****', response, '***')
                 self._load_botzone_request_line(request)
+                # test
+                # 测试
                 self._env._update_action_space_and_fan()
-                print('Before response: ', self.action_space)
-                if response == 'PASS':
-                    continue
-
-                # PLAY/PENG/BUGANG的情况可以直接送入处理
-                if re.match(r'PLAY|PENG|BUGANG', response) is not None:
-                    self._load_botzone_request_line(f'3 {self._my_id} {response}')
                 
                 # GANG有明杠和暗杠两种情况，如果是暗杠，需要把动作保存到self._last_anganged_card以备处理
-                elif response.startswith('GANG'):
+                if response.startswith('GANG'):
                     response_parts = response.split()
-                    # 如果是明杠，杠的牌是前面的玩家打出来的牌
-                    if len(response_parts) == 1:
-                        self._load_botzone_request_line(f'3 {self._my_id} {response}')
                     # 如果是暗杠，需要考虑杠的是哪一张牌
-                    else:
+                    if len(response_parts) > 1:
                         self._last_anganged_card = response_parts[-1]
-                        self._load_botzone_request_line(f'3 {self._my_id} {" ".join(response_parts[:-1])}')
                 
-                # 吃牌可能失败，需要判定，成功才送入处理
-                elif response.startswith('CHI'):
-                    next_request = requests[i+1]
-                    # 后面有人要碰/杠
-                    if re.search(r'PENG|GANG', next_request) is None:
-                        self._load_botzone_request_line(f'3 {self._my_id} {response}')
-                self._env._update_action_space_and_fan()
-        
-                print(self._wall_remains)
-                print(self._my_id)
-                print(self.observation)
-                print('After response: ', self.action_space)
+                print('Action_space: ', self.action_space)
+                print('\tactive_player: ', self._env._active_player, '\tlast_active: ', self._last_player_id)
+                print('\tmy_id: ', self._my_id, '\tmy_wind: ', self._my_seat_wind)
+                print('\twall_remain: ', self._wall_remains)
+                
+                print('\tmy_hand_card: ', self._env._hand_card_counters[self._my_id], self._env._current_card, self._env._current_card_from)
+                print('\tdiscard_history: ', self._env._discard_histories)
+                print('\tshown_packs: ', self._env._shown_packs)
                 print()
-
+                self._last_player_id = self._env._active_player
             self._load_botzone_request_line(requests[-1])
             self._env._update_action_space_and_fan()
 
