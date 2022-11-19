@@ -19,7 +19,7 @@ class ChineseStandardMahjongBotzoneAdapter(BotzoneAdapter):
         # 我方的id
         self._my_id = None
         # 各方牌墙剩余
-        self._wall_remains = [len(self._env._card_names) // self._env.n_players - self._env._n_hand_card for _ in range(self._env.n_players)]
+        self._wall_remains = [len(self._env._card_names) * self._env._n_duplicate_cards // self._env.n_players - self._env._n_hand_card for _ in range(self._env.n_players)]
         # 各方手牌剩余
         self._n_hand_cards = [self._env._n_hand_card for _ in range(self._env.n_players)]
         # 各方暗杠数量
@@ -28,6 +28,8 @@ class ChineseStandardMahjongBotzoneAdapter(BotzoneAdapter):
         self._last_anganged_card = None
         # 处理过的历史长度
         self._processed_history_length = 0
+
+        self._env._set_current_card_and_source(None, None)
 
     # 我方观测信息
     @property
@@ -75,11 +77,6 @@ class ChineseStandardMahjongBotzoneAdapter(BotzoneAdapter):
     def _my_initial_hand_card(self) -> Tuple[str]:
         return self._env._initial_hand_cards[self._my_id]
     
-    # 我方当前手牌
-    @property
-    def _my_hand_card_counter(self) -> Counter[str]:
-        return self._env._hand_card_counters[self._my_id]
-
     # 修改我方手牌
     def _add_to_my_hand_card_counter(self, card:ChineseStandardMahjongEnv.CardNameType, n:int=1):
         self._env._hand_card_counters[self._my_id][card] += n
@@ -126,7 +123,7 @@ class ChineseStandardMahjongBotzoneAdapter(BotzoneAdapter):
         
         # 设置门风圈风
         if int(request_parts[0]) == 0:
-            prevalent_wind, seat_wind = map(int, request_parts[1:])
+            seat_wind, prevalent_wind = map(int, request_parts[1:])
             self._env.prevalent_wind = 1 + prevalent_wind
             self._env.seat_winds = tuple(1 + (prevalent_wind + i) % self._env.n_players for i in range(self._env.n_players))
             self._my_id = (seat_wind - prevalent_wind) % self._env.n_players
@@ -138,7 +135,7 @@ class ChineseStandardMahjongBotzoneAdapter(BotzoneAdapter):
             flower_count = request_parts[1:1+self._env.n_players]
             cards = tuple(request_parts[1+self._env.n_players:])
             self._env._initial_hand_cards = tuple(tuple() if i != self._my_id else cards for i in range(self._env.n_players))
-            self._env._hand_card_counters[self._my_id] = Counter(cards)
+            self._env._hand_card_counters = tuple(Counter() if i != self._my_id else Counter(cards) for i in range(self._env.n_players))
             return
 
         # 自己摸牌
@@ -150,8 +147,11 @@ class ChineseStandardMahjongBotzoneAdapter(BotzoneAdapter):
             self._wall_remains[self._my_id] -= 1            
             # 摸出一张牌
             card = request_parts[1]
+            # 海底牌标记
+            if self._wall_remains[self._env._next_player(self._my_id)] == 0:
+                self._env._is_wall_last = True
             # 手牌数目不增加，直至打出一张牌/补杠/暗杠时才将摸到的牌添加到自己的手牌中
-            self._env._set_current_card_and_from(card, None)
+            self._env._set_current_card_and_source(card, None)
             return
 
         # 各个玩家动作
@@ -170,6 +170,9 @@ class ChineseStandardMahjongBotzoneAdapter(BotzoneAdapter):
                 self._wall_remains[player] -= 1
                 # 其他玩家的手牌数目直接增加
                 self._n_hand_cards[player] += 1
+                # 海底牌标记
+                if self._wall_remains[self._env._next_player(player)] == 0:
+                    self._env._is_wall_last = True
                 # 标记为摸牌后阶段，但是不知道摸的是什么牌
                 self._env._set_current_card_and_source(None, None)
                 return
@@ -200,7 +203,7 @@ class ChineseStandardMahjongBotzoneAdapter(BotzoneAdapter):
                 # 如果是自己吃牌，还需要维护自己的手牌
                 if player == self._my_id:
                     # 吃进去1张牌
-                    self._add_to_my_hand_card_counter(self._env._current_card, 1)
+                    self._add_to_my_hand_card_counter(self._env._current_card)
                     # 打出去1张牌
                     self._add_to_my_hand_card_counter(played_card, -1)
                     # 变成副露的牌
@@ -243,7 +246,7 @@ class ChineseStandardMahjongBotzoneAdapter(BotzoneAdapter):
                     if player == self._my_id:
                         self._env._add_hidden_pack(self._last_anganged_card)
                         # 把摸的牌放进手牌中
-                        self._add_to_my_hand_card_counter(self._env._current_card, 1)
+                        self._add_to_my_hand_card_counter(self._env._current_card)
                         # 把暗杠的牌删去
                         self._add_to_my_hand_card_counter(self._last_anganged_card, -self._env._gang_tile_length)
                     
@@ -280,32 +283,32 @@ class ChineseStandardMahjongBotzoneAdapter(BotzoneAdapter):
                 
                 self._n_hand_cards[player] += 1
                 self._env._unprocessed_actions.append(f'BuGang{buganged_card}')
-                self._env._set_current_card_and_from(buganged_card, player)
+                self._env._set_current_card_and_source(buganged_card, player)
 
-    def load_botzone_requests(self, requests:List[str]) -> None:
-        requests = list(filter(lambda line: len(line.strip()) > 0, requests))
+    def load_botzone_request(self, requests:List[str]) -> None:
+        requests = list(filter(lambda line: len(line) > 0, map(lambda line: line.strip(), requests)))
         
         round_to_load = int(requests[0])
         requests = requests[1:]
 
         responses = [r for r in requests if re.match(r'\d', r) is None]
         requests = [r for r in requests if re.match(r'\d', r) is not None]
-
+        assert len(requests) == len(responses) + 1
         # 采用长时运行模式，需要记录处理了多少条记录
         if len(responses) == 0:
             for request in requests[self._processed_history_length:]:
                 self._load_botzone_request_line(request)
             self._processed_history_length = len(request)
         
+        
         # 没有采用长时运行模式，需要从头处理
         else:
-            for i in range(len(requests)):
-                request, response = requests[i], response[i]
-                assert len(request) == len(response) + 1
-
-                # 需要考虑如果别人吃牌，但是被我碰杠掉的情况
-                if re.match(r'PENG|GANG', response) is None:
-                    self._load_botzone_request_line(request)
+            for i in range(len(responses)):
+                request, response = requests[i], responses[i]
+                print('***', request, '*****', response, '***')
+                self._load_botzone_request_line(request)
+                self._env._update_action_space_and_fan()
+                print('Before response: ', self.action_space)
                 if response == 'PASS':
                     continue
 
@@ -330,11 +333,19 @@ class ChineseStandardMahjongBotzoneAdapter(BotzoneAdapter):
                     # 后面有人要碰/杠
                     if re.search(r'PENG|GANG', next_request) is None:
                         self._load_botzone_request_line(f'3 {self._my_id} {response}')
-
-
+                self._env._update_action_space_and_fan()
         
+                print(self._wall_remains)
+                print(self._my_id)
+                print(self.observation)
+                print('After response: ', self.action_space)
+                print()
+
+            self._load_botzone_request_line(requests[-1])
+            self._env._update_action_space_and_fan()
+
+    
     def generate_botzone_response(self, agent:Agent) -> str:
-        self._last_action = None
         
         pass
 
@@ -342,7 +353,15 @@ class ChineseStandardMahjongBotzoneAdapter(BotzoneAdapter):
 
 if __name__ == '__main__':
     adapter = ChineseStandardMahjongBotzoneAdapter()
-
+    with open('log.txt', 'r', encoding='utf-8') as log_file:
+        lines = log_file.readlines()
+        
+        adapter.load_botzone_request(lines)
+        
+        print(adapter._wall_remains)
+        print(adapter._my_id)
+        print(adapter.observation)
+        print(adapter.action_space)
 
 '''
 self._observation = {

@@ -383,7 +383,7 @@ class ChineseStandardMahjongEnv(MultiAgentEnv):
             'n_hidden_packs' : tuple(map(len, self._hidden_packs)),
             # 每个玩家的牌河
             'discard_histories' : self._discard_histories,
-            # 当前待决策的牌，可能来自发牌也可能来自吃碰杠
+            # 当前待决策的牌，可能来自发牌也可能来自打牌
             'current_card' : self._current_card,
             # 当前待决策的牌的来源，如果为None则为环境发牌
             'current_card_from' : self._current_card_from
@@ -439,13 +439,14 @@ class ChineseStandardMahjongEnv(MultiAgentEnv):
         if self.done:
             return
         
-        # 别人打出牌，吃碰杠阶段
+        # 别人打出牌，吃碰杠和阶段
         if has_unprocessed_actions and self._unprocessed_actions[0].startswith('Play'):
             self._action_space.append('Pass')
             self._add_hu_actions_and_update_fan()
-            # 海底牌不能吃碰杠
+            # 非海底牌方可吃碰杠
             if not self._is_wall_last:
                 self._add_peng_actions()
+                # 只能吃上家的牌
                 if len(self._unprocessed_actions) == 1:
                     self._add_chi_actions()
                 # 自己牌墙里有牌才能杠
@@ -480,7 +481,7 @@ class ChineseStandardMahjongEnv(MultiAgentEnv):
         self._action_space.extend(f'Play{card}' 
             for card, card_num in self._hand_card_counters[self.active_player].items() if card_num > 0
         )
-        if self._current_card is not None:
+        if self._current_card is not None and self._hand_card_counters[self.active_player][self._current_card] == 0:
             self._action_space.append(f'Play{self._current_card}')
 
     # 生成吃牌动作
