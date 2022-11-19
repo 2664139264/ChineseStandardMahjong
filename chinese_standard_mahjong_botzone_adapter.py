@@ -353,7 +353,8 @@ class ChineseStandardMahjongBotzoneAdapter(BotzoneAdapter):
         
         pass
 
-
+# 需要改动作空间：自己打出的牌自己不能吃碰杠
+# 仅在最后一步更新动作空间
 
 if __name__ == '__main__':
     adapter = ChineseStandardMahjongBotzoneAdapter()
