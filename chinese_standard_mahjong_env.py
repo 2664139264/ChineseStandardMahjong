@@ -371,6 +371,8 @@ class ChineseStandardMahjongEnv(MultiAgentEnv):
             'fan' : self.fan,
             # 胜者
             'winner' : self.winner,
+            # 动作空间
+            'action_space' : self.action_space,
             # 自己的手牌
             'hand_card' : self._hand_card_counters[self.active_player],
             # 每个玩家的手牌数目
@@ -397,6 +399,7 @@ class ChineseStandardMahjongEnv(MultiAgentEnv):
             'done' : self.done,
             'fan' : self.fan,
             'winner' : self.winner,
+            'action_space' : self.action_space,
             'scores' : self.scores,
             # 每个玩家的手牌
             'hand_cards' : self._hand_card_counters,

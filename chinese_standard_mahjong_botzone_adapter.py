@@ -1,13 +1,14 @@
 import re
+import sys
 from copy import deepcopy
-from typing import List, Tuple, Counter
+from typing import List, Tuple, Counter, Iterable, Callable
 from collections import Counter
 
 from agent import Agent
 from botzone_adapter import BotzoneAdapter
 from chinese_standard_mahjong_env import ChineseStandardMahjongEnv
 
-# 适配Botzone简单交互，交互格式参考https://wiki.botzone.org.cn/index.php?title=Chinese-Standard-Mahjong
+# 适配Botzone简单交互长时运行模式，交互格式参考https://wiki.botzone.org.cn/index.php?title=Chinese-Standard-Mahjong
 class ChineseStandardMahjongBotzoneAdapter(BotzoneAdapter):
 
     def __init__(self):
@@ -30,12 +31,10 @@ class ChineseStandardMahjongBotzoneAdapter(BotzoneAdapter):
         self._last_anganged_card = None
         # 处理过的历史长度
         self._processed_history_length = 0
-        # 上一次决策的玩家是谁
-        self._last_player_id = None
-        # 初始化当前牌张
+        # 等待发牌状态
         self._env._set_current_card_and_source(None, None)
 
-    # 我方观测信息
+    # 返回我方观测信息，同ChineseStandardMahjongEnv中的observation
     @property
     def observation(self) -> ChineseStandardMahjongEnv.ObservationType:
         return deepcopy({
@@ -53,6 +52,8 @@ class ChineseStandardMahjongBotzoneAdapter(BotzoneAdapter):
             'fan' : self._env.fan,
             # 胜者
             'winner' : self._env.winner,
+            # 动作空间
+            'action_space' : self.action_space,
             # 自己的手牌
             'hand_card' : self._env._hand_card_counters[self._my_id],
             # 每个玩家的手牌数目
@@ -71,10 +72,35 @@ class ChineseStandardMahjongBotzoneAdapter(BotzoneAdapter):
             'current_card_from' : self._env._current_card_from
         })
     
+    # 更新动作空间和成番情况
+    def _update_action_space_and_fan(self):
+        
+        # 因为需要对其他人打牌等做出回应，需要先将active_player切换到自己
+        active_player = self._env._active_player
+        self._env._active_player = self._my_id
+        self._env._update_action_space_and_fan()
+        self._env._active_player = active_player
+
+        # 无可选动作需要Pass，自己杠完牌也只能pass，别人摸牌自己只能Pass。
+        if len(self._env._action_space) == 0 or self._is_my_gang or self._is_others_draw:
+            self._env._action_space = ['Pass']
+
+        # 不是上家打的不能吃，海底牌也不能吃
+        if self._env._current_card_from != self._env._next_player(self._my_id, -1) or self._env._is_wall_last:
+            self._env._action_space = list(filter(lambda x: not x.startswith('Chi'), self._env._action_space))
+        
+        # 环境发的和自己打的不能碰杠，海底牌也不能碰杠
+        if self._env._current_card_from in {None, self._my_id} or self._env._is_wall_last:
+            self._env._action_space = list(filter(lambda x: re.match(r'Peng|Gang', x) is None, self._env._action_space))
+        
+        # 自己牌墙没牌了不能杠牌
+        if self._wall_remains[self._my_id] == 0:
+            self._env._action_space = list(filter(lambda x: 'Gang' not in x, self._env._action_space))
+
     # 我方动作空间
     @property
     def action_space(self) -> List[ChineseStandardMahjongEnv.ActionNameType]:
-        return self._env.action_space
+        return self._env.action_space 
 
     # 初始的13张手牌
     @property
@@ -89,7 +115,6 @@ class ChineseStandardMahjongBotzoneAdapter(BotzoneAdapter):
     def _process_successful_bugang_and_play(self) -> None:
         
         # 如果没有打牌或者补杠操作
-        print('Unprocessed_actions: ', self._env._unprocessed_actions)
         if len(self._env._unprocessed_actions) == 0:
             return
         
@@ -124,6 +149,8 @@ class ChineseStandardMahjongBotzoneAdapter(BotzoneAdapter):
 
     # 将Botzone格式的request加载入内置环境
     def _load_botzone_request_line(self, request:str) -> None:
+        self._is_my_gang = False
+        self._is_others_draw = False
         request_parts = request.split()
         
         # 设置门风圈风
@@ -134,6 +161,7 @@ class ChineseStandardMahjongBotzoneAdapter(BotzoneAdapter):
             self._env.seat_winds = tuple(1 + (prevalent_wind + i) % self._env.n_players for i in range(self._env.n_players))
             self._my_id = (seat_wind - prevalent_wind) % self._env.n_players
             self._env._active_player = self._my_id
+            self._env._action_space = ['Pass']
             return
 
         # 发初始手牌
@@ -142,6 +170,7 @@ class ChineseStandardMahjongBotzoneAdapter(BotzoneAdapter):
             cards = tuple(request_parts[1+self._env.n_players:])
             self._env._initial_hand_cards = tuple(tuple() if i != self._my_id else cards for i in range(self._env.n_players))
             self._env._hand_card_counters = tuple(Counter() if i != self._my_id else Counter(cards) for i in range(self._env.n_players))
+            self._env._action_space = ['Pass']
             return
 
         # 自己摸牌
@@ -173,7 +202,7 @@ class ChineseStandardMahjongBotzoneAdapter(BotzoneAdapter):
             
             # 其他玩家摸牌（自己摸牌的情况在2中已经处理掉了）
             if action_type == 'DRAW':
-                print('draw: ', player)
+                self._is_others_draw = True
                 self._env._active_player = player
                 # 看看有没有成功的补杠和打牌待处理
                 self._process_successful_bugang_and_play()
@@ -203,6 +232,7 @@ class ChineseStandardMahjongBotzoneAdapter(BotzoneAdapter):
                         self._add_to_my_hand_card_counter(self._env._current_card)
                     self._add_to_my_hand_card_counter(card, -1)
                 
+                self._env._unprocessed_actions.clear()
                 # 当前牌为打出的牌
                 self._env._set_current_card_and_source(card, player)
                 self._env._unprocessed_actions.append(f'Play{card}')
@@ -226,10 +256,10 @@ class ChineseStandardMahjongBotzoneAdapter(BotzoneAdapter):
 
                 # 待决策的牌转为打出的牌
                 self._env._set_current_card_and_source(played_card, player)
+                self._env._unprocessed_actions.clear()
                 self._env._unprocessed_actions.append(f'Play{played_card}')
                 # 手牌数目增减
                 self._n_hand_cards[player] -= self._env._chi_tile_length
-                self._env._unprocessed_actions.clear()
                 return
 
             # 某个玩家碰牌，并且顺手打出一张
@@ -246,10 +276,10 @@ class ChineseStandardMahjongBotzoneAdapter(BotzoneAdapter):
                     self._add_to_my_hand_card_counter(played_card, -1)
                 # 待决策的牌转为打出的牌
                 self._env._set_current_card_and_source(played_card, player)
+                self._env._unprocessed_actions.clear()
                 self._env._unprocessed_actions.append(f'Play{played_card}')
                 # 手牌数目增减
                 self._n_hand_cards[player] -= self._env._peng_tile_length
-                self._env._unprocessed_actions.clear()
                 return
             
             # 某个玩家杠上一张打出来的牌/从环境摸来的牌
@@ -260,7 +290,7 @@ class ChineseStandardMahjongBotzoneAdapter(BotzoneAdapter):
                 if self._env._current_card_from is None and self._env._current_card is not None:
                     # 如果是我的暗杠，需要从self._last_anganged_card读取暗杠的是哪一张牌
                     if player == self._my_id:
-                        self._env._add_hidden_pack(self._last_anganged_card)
+                        self._env._add_hidden_pack(f'AnGang{self._last_anganged_card}')
                         # 把摸的牌放进手牌中
                         self._add_to_my_hand_card_counter(self._env._current_card)
                         # 把暗杠的牌删去
@@ -271,6 +301,7 @@ class ChineseStandardMahjongBotzoneAdapter(BotzoneAdapter):
                     # 修改手牌数目：摸进1张，杠掉4张
                     self._n_hand_cards[player] -= self._env._gang_tile_length - 1
                     self._env._set_current_card_and_source(None, None)
+                    self._is_my_gang = True
 
                 # 如果杠的上一回合是别人打牌，那么就是明杠
                 else:
@@ -283,7 +314,7 @@ class ChineseStandardMahjongBotzoneAdapter(BotzoneAdapter):
                     # 修改手牌数目：摸进1张，杠掉4张
                     self._n_hand_cards[player] -= self._env._gang_tile_length - 1
                     self._env._set_current_card_and_source(None, None)
-                
+                    self._is_my_gang = True
                 self._env._unprocessed_actions.clear()
                 # 下一个动作一定是摸牌
                 return
@@ -297,334 +328,91 @@ class ChineseStandardMahjongBotzoneAdapter(BotzoneAdapter):
                 if player == self._my_id:
                     # 先把环境摸来的牌加入手牌中，不然会信息丢失
                     self._add_to_my_hand_card_counter(self._env._current_card)
+                    self._is_my_gang = True
                 
                 self._n_hand_cards[player] += 1
+                self._env._unprocessed_actions.clear()
                 self._env._unprocessed_actions.append(f'BuGang{buganged_card}')
                 self._env._set_current_card_and_source(buganged_card, player)
 
-    def load_botzone_request(self, requests:List[str]) -> None:
-        requests = list(filter(lambda line: len(line) > 0, map(lambda line: line.strip(), requests)))
+    # 从request_loader（默认为input）中加载botzone的request序列，使用agent生成符合botzone格式的response并输出到sys.stdout
+    # agent.select_action接收observation为参数，输出observation['action_space']中的某个动作
+    def load_botzone_request_and_generate_response(self, agent:Agent, request_loader:Callable) -> None:
         
-        round_to_load = int(requests[0])
-        requests = requests[1:]
-
-        responses = [r for r in requests if re.match(r'\d', r) is None]
-        requests = [r for r in requests if re.match(r'\d', r) is not None]
-        # 采用长时运行模式，需要记录处理了多少条记录
-        if len(responses) == 0:
-            for request in requests[self._processed_history_length:]:
+        while True:
+            request = request_loader().strip()
+            if not request or len(request.split()) == 1:
+                continue
+            
+            # 确定风圈、发初始手牌
+            if request.startswith('0') or request.startswith('1'):
                 self._load_botzone_request_line(request)
-                self._last_player_id = self._env._active_player
-            self._processed_history_length = len(request)
-        
-        # 没有采用长时运行模式，需要从头处理
-        else:
-            assert len(requests) == len(responses) + 1
-            for i in range(len(responses)):
-                request, response = requests[i], responses[i]
-                print('***', request, '*****', response, '***')
+                print('PASS')
+            
+            # 行牌过程request
+            else:
                 self._load_botzone_request_line(request)
-                # test
-                # 测试
-                self._env._update_action_space_and_fan()
-                
-                # GANG有明杠和暗杠两种情况，如果是暗杠，需要把动作保存到self._last_anganged_card以备处理
-                if response.startswith('GANG'):
-                    response_parts = response.split()
-                    # 如果是暗杠，需要考虑杠的是哪一张牌
-                    if len(response_parts) > 1:
-                        self._last_anganged_card = response_parts[-1]
-                
-                print('Action_space: ', self.action_space)
-                print('\tactive_player: ', self._env._active_player, '\tlast_active: ', self._last_player_id)
-                print('\tmy_id: ', self._my_id, '\tmy_wind: ', self._my_seat_wind)
-                print('\twall_remain: ', self._wall_remains)
-                
-                print('\tmy_hand_card: ', self._env._hand_card_counters[self._my_id], self._env._current_card, self._env._current_card_from)
-                print('\tdiscard_history: ', self._env._discard_histories)
-                print('\tshown_packs: ', self._env._shown_packs)
-                print()
-                self._last_player_id = self._env._active_player
-            self._load_botzone_request_line(requests[-1])
-            self._env._update_action_space_and_fan()
-
-    
-    def generate_botzone_response(self, agent:Agent) -> str:
+                self._update_action_space_and_fan()
+                print(self._generate_botzone_response(agent))
+            
+            # Botzone长时运行标记
+            print('>>>BOTZONE_REQUEST_KEEP_RUNNING<<<')
+            sys.stdout.flush()
         
-        pass
+    # 如果动作选择了暗杠，会将动作记录在self._last_anganged_card中，以备后续加载状态
+    def _generate_botzone_response(self, agent:Agent) -> str:
 
-# 需要改动作空间：自己打出的牌自己不能吃碰杠
-# 仅在最后一步更新动作空间
+        action = agent.select_action(self.observation)
 
-if __name__ == '__main__':
-    adapter = ChineseStandardMahjongBotzoneAdapter()
-    with open('log.txt', 'r', encoding='utf-8') as log_file:
-        lines = log_file.readlines()
+        action_type, card = self._env.action_to_tuple(action)
+
+        if action_type in {'Pass', 'Hu'}:
+            return action.upper()
+
+        if action_type == 'Play':
+            return f'PLAY {card}'
         
-        adapter.load_botzone_request(lines)
+        if action_type == 'AnGang':
+            self._last_anganged_card = card
+            return f'GANG {card}'
+
+        if action_type == 'Gang':
+            return 'GANG'
+
+        if action_type == 'BuGang':
+            return f'BUGANG {card}'
         
-        print(adapter._wall_remains)
-        print(adapter._my_id)
-        print(adapter.observation)
-        print(adapter.action_space)
-
-'''
-self._observation = {
-            # 圈风
-            'prevalent_wind' : self.prevalent_wind,
-            # 门风
-            'seat_winds' : self.seat_winds,
-            # 每位玩家的牌墙各自还剩多少张
-            'wall_remains' : tuple(self.wall_remain(i) for i in range(self.n_players)),
-            # 游戏是否结束
-            'done' : self.done,
-            # 分数
-            'scores' : self.scores,
-            # 如果当前游戏未结束，则为自己形成的番；否则为胜者形成的番
-            'fan' : self.fan,
-            # 胜者
-            'winner' : self.winner,
-            # 自己的手牌
-            'hand_card' : self._hand_card_counters[self.active_player],
-            # 每个玩家的手牌数目
-            'n_hand_cards' : tuple(map(lambda x : sum(x.values()), self._hand_card_counters)),
-            # 每个玩家的副露
-            'shown_packs' : self._shown_packs,
-            # 每个玩家的暗杠数量
-            'n_hidden_packs' : tuple(map(len, self._hidden_packs)),
-            # 每个玩家的牌河
-            'discard_histories' : self._discard_histories,
-            # 当前待决策的牌，可能来自发牌也可能来自吃碰杠
-            'current_card' : self._current_card,
-            # 当前待决策的牌的来源，如果为None则为环境发牌
-            'current_card_from' : self._current_card_from
-        }
-'''
-
-'''
-110
-0 1 3
-PASS
-1 0 0 0 0 W7 F4 B8 B5 W3 B5 J1 F1 B8 T1 B3 T5 W4
-PASS
-3 0 DRAW
-PASS
-3 0 PLAY T1
-PASS
-2 F1
-PLAY F4
-3 1 PLAY F4
-PASS
-3 2 DRAW
-PASS
-3 2 PLAY F2
-PASS
-3 3 DRAW
-PASS
-3 3 PLAY J1
-PASS
-3 0 DRAW
-PASS
-3 0 PLAY T2
-PASS
-2 W9
-PLAY J1
-3 1 PLAY J1
-PASS
-3 2 DRAW
-PASS
-3 2 PLAY F4
-PASS
-3 3 DRAW
-PASS
-3 3 PLAY F3
-PASS
-3 0 PENG T6
-PASS
-2 W1
-PLAY T1
-3 1 PLAY T1
-PASS
-3 2 DRAW
-PASS
-3 2 PLAY J3
-PASS
-3 3 DRAW
-PASS
-3 3 PLAY T7
-PASS
-3 0 DRAW
-PASS
-3 0 PLAY T5
-PASS
-2 B4
-PLAY W1
-3 1 PLAY W1
-PASS
-3 2 DRAW
-PASS
-3 2 PLAY B5
-PASS
-3 3 DRAW
-PASS
-3 3 PLAY W4
-PASS
-3 0 DRAW
-PASS
-3 0 PLAY T5
-PASS
-2 W5
-PLAY W9
-3 1 PLAY W9
-PASS
-3 2 DRAW
-PASS
-3 2 PLAY J2
-PASS
-3 3 DRAW
-PASS
-3 3 PLAY W3
-PASS
-3 0 CHI W3 J1
-PASS
-2 T8
-PLAY T8
-3 1 PLAY T8
-PASS
-3 2 DRAW
-PASS
-3 2 PLAY B9
-PASS
-3 3 DRAW
-PASS
-3 3 PLAY B6
-PASS
-3 0 DRAW
-PASS
-3 0 PLAY F2
-PASS
-2 W9
-PLAY W9
-3 1 PLAY W9
-PASS
-3 2 DRAW
-PASS
-3 2 PLAY T1
-PASS
-3 3 DRAW
-PASS
-3 3 PLAY T6
-PASS
-3 0 DRAW
-PASS
-3 0 PLAY T9
-PASS
-2 F2
-PLAY F2
-3 1 PLAY F2
-PASS
-3 2 DRAW
-PASS
-3 2 PLAY T2
-PASS
-3 3 DRAW
-PASS
-3 3 PLAY J1
-PASS
-3 0 DRAW
-PASS
-3 0 PLAY J3
-PASS
-2 F3
-PLAY F3
-3 1 PLAY F3
-PASS
-3 2 DRAW
-PASS
-3 2 PLAY T8
-PASS
-3 3 DRAW
-PASS
-3 3 PLAY T3
-PASS
-3 0 DRAW
-PASS
-3 0 PLAY W9
-PASS
-2 B4
-PLAY F1
-3 1 PLAY F1
-PASS
-3 2 DRAW
-PASS
-3 2 PLAY F4
-PASS
-3 3 DRAW
-PASS
-3 3 PLAY T3
-PASS
-3 0 DRAW
-PASS
-3 0 PLAY B8
-PASS
-2 B9
-PLAY F1
-3 1 PLAY F1
-PASS
-3 2 DRAW
-PASS
-3 2 PLAY W1
-PASS
-3 3 DRAW
-PASS
-3 3 PLAY J2
-PASS
-3 0 PENG W6
-PASS
-2 T4
-PLAY B9
-3 1 PLAY B9
-PASS
-3 2 DRAW
-PASS
-3 2 PLAY B7
-PASS
-3 3 DRAW
-PASS
-3 3 PLAY T2
-PASS
-3 0 DRAW
-PASS
-3 0 PLAY J3
-PASS
-2 F1
-PLAY F1
-3 1 PLAY F1
-PASS
-3 2 DRAW
-PASS
-3 2 PLAY T3
-PASS
-3 3 DRAW
-PASS
-3 3 PLAY B9
-PASS
-3 0 DRAW
-PASS
-3 0 PLAY B3
-CHI B4 W7
-3 3 PENG T5
-PASS
-3 0 DRAW
-PASS
-3 0 PLAY B1
-PASS
-2 T9
-PLAY T9
-3 1 PLAY T9
-
-
-
-
-
-'''
+        if action_type == 'Chi':
+            # 复制一份环境，假装吃牌成功了
+            new_adapter = deepcopy(self)
+            new_adapter._env._active_player = self._my_id
+            new_adapter._env._add_shown_pack(action, card_from=new_adapter._env._current_card_from)
+            # 修改手牌
+            new_adapter._add_to_my_hand_card_counter(new_adapter._env._current_card)
+            for i in range(-1, -1+new_adapter._env._chi_tile_length):
+                new_adapter._add_to_my_hand_card_counter(new_adapter._env.card_name(new_adapter._env.card_id(card)+i), -1)
+            new_adapter._env._set_current_card_and_source(None, None)
+            new_adapter._n_hand_cards[new_adapter._my_id] -= new_adapter._env._chi_tile_length - 1
+            new_adapter._env._unprocessed_actions.clear()
+            new_adapter._update_action_space_and_fan()
+            # 生成新的observation再调用agent决策吃完打什么牌
+            play_action = agent.select_action(new_adapter.observation)
+            play, played_card = new_adapter._env.action_to_tuple(play_action)
+            assert play == 'Play'
+            return f'CHI {card} {played_card}'
+        
+        if action_type == 'Peng':
+            # 复制一份环境，假装碰牌成功了
+            new_adapter = deepcopy(self)
+            new_adapter._env._active_player = self._my_id
+            new_adapter._env._add_shown_pack(action, card_from=new_adapter._env._current_card_from)
+            new_adapter._add_to_my_hand_card_counter(new_adapter._env._current_card, 1-new_adapter._env._peng_tile_length)
+            new_adapter._env._set_current_card_and_source(None, None)
+            new_adapter._n_hand_cards[new_adapter._my_id] -= new_adapter._env._chi_tile_length - 1
+            new_adapter._env._unprocessed_actions.clear()
+            new_adapter._update_action_space_and_fan()
+            # 生成新的observation再调用agent决策碰完打什么牌
+            play_action = agent.select_action(new_adapter.observation)
+            play, played_card = new_adapter._env.action_to_tuple(play_action)
+            assert play == 'Play'
+            return f'PENG {played_card}'
