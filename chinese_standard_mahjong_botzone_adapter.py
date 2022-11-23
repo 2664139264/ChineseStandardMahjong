@@ -343,7 +343,7 @@ class ChineseStandardMahjongBotzoneAdapter(BotzoneAdapter):
             request = request_loader().strip()
             if not request or len(request.split()) == 1:
                 continue
-            
+
             # 确定风圈、发初始手牌
             if request.startswith('0') or request.startswith('1'):
                 self._load_botzone_request_line(request)

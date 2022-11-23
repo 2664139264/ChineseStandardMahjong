@@ -460,13 +460,8 @@ class ChineseStandardMahjongEnv(MultiAgentEnv):
         elif has_unprocessed_actions and self._unprocessed_actions[0].startswith('BuGang'):
             self._action_space.append('Pass')
             self._add_hu_actions_and_update_fan()
-        
-        # 杠后摸打，可能开花阶段
-        elif self._is_about_kong and self._current_card is not None and self._current_card_from is None:
-            self._add_play_actions()
-            self._add_hu_actions_and_update_fan()
 
-        # 接受发牌阶段
+        # 接受发牌阶段 / 杠后摸打阶段
         elif self._current_card is not None and self._current_card_from is None:
             self._add_play_actions()
             self._add_hu_actions_and_update_fan()
