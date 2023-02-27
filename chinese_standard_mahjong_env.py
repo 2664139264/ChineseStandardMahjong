@@ -277,7 +277,7 @@ class ChineseStandardMahjongEnv(MultiAgentEnv):
             self._seed_wall_initializer()
 
     # 用随机种子初始化手牌和牌墙
-    def _seed_wall_initializer(self, seed:int=None):
+    def _seed_wall_initializer(self, seed:Union[int,None]=None):
         if seed is not None:
             np.random.seed(seed)
         cards = list(self._card_names * self._n_duplicate_cards)
