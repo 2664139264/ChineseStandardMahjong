@@ -1,0 +1,7 @@
+author: wangyongyi@pku.edu.cn
+
+This is an environment for developing reinforcement learning agent on Chinese Standard Mahjong.
+
+RL Training modules & faster C++ environment and its python wrapper are on our schedule.
+
+This environment may be modified or reconstructed for efficiency.
